@@ -1,10 +1,32 @@
 FakeDns
 =======
 
-Bugs:
-@crypt0s - Twitter
-bryanhalf@gmail.com - Email
+This is a fork of Crypt0s's FakeDns, with a time-based rebind feature added.
 
+The old functionality is left, and it would be nice to merge this feature into the config-file interface eventually, but WIP and all that.
+
+Time-based Rebind
+======
+
+Rebinding based off the number of requests can be unreliable due to browser
+speculation, prefetching and caching. Instead, we use a time-based rebind
+mechanism, where for each client IP (and each unique domain) is given a
+"primary" IP as a result for the first N seconds, no matter how many requests
+they make during that time. Once the timer expires, the rebind (secondary) IP
+address is returned.
+
+We also encode the secondary IP in the domain name, in little-endian order. So
+if we are rebinding on the domain test.example.com, we can have a client
+lookup 1.0.168.192.test.example.com. After the timeout, FakeDns will provide
+clients a response containing 192.168.0.1.
+
+    USAGE:
+    ./fakedns.py --primary-ip 6.6.6.6 --domain test.example.com --timeout 55
+
+
+
+OldDocs
+======
 
 A python regular-expression based DNS server!
 
