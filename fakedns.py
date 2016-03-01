@@ -363,26 +363,84 @@ class ruleEngine:
                     print ">> Matched Request - " + query.dominio
                     return response.make_packet()
 
-        # OK, we don't have a rule for it, lets see if it exists...
-        try:
-            # We need to handle the request potentially being a TXT,A,MX,ect... request.
-            # So....we make a socket and literally just forward the request raw
-            # to our DNS server.
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(3.0)
-            addr = ('8.8.8.8', 53)
-            s.sendto(query.data, addr)
-            data = s.recv(1024)
-            s.close()
-            print "Unmatched Request " + query.dominio
-            return data
-        except:
-            # We really shouldn't end up here, but if we do, we want to handle it gracefully and not let down the client.
-            # The cool thing about this is that NOTFOUND will take the type straight out of
-            # the query object and build the correct query response type from
-            # that automagically
-            print ">> Error was handled by sending NONEFOUND"
-            return NONEFOUND(query).make_packet()
+        return lookup_normal(query, addr)
+
+
+def lookup_normal(query, addr):
+    # OK, we don't have a rule for it, lets see if it exists...
+    try:
+        # We need to handle the request potentially being a TXT,A,MX,ect... request.
+        # So....we make a socket and literally just forward the request raw
+        # to our DNS server.
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(3.0)
+        addr = ('8.8.8.8', 53)
+        s.sendto(query.data, addr)
+        data = s.recv(1024)
+        s.close()
+        print "Unmatched Request " + query.dominio
+        return data
+    except:
+        # We really shouldn't end up here, but if we do, we want to handle it gracefully and not let down the client.
+        # The cool thing about this is that NOTFOUND will take the type straight out of
+        # the query object and build the correct query response type from
+        # that automagically
+        print ">> Error was handled by sending NONEFOUND"
+        return NONEFOUND(query).make_packet()
+
+
+# Currently only supports IPv4/A records
+# Given:
+# 1. a base domain (e.g. rebind.example.com)
+# 2. a first-IP address (e.g. 1.2.3.4)
+# 3. and timeout in seconds (optional)
+#
+# This will return/match every domain that ends with the base domain
+# and a pattern that contains a secondary IP address. For each unique
+# requesting client (by requesting IP), It will return
+# the first-IP for the first timeout seconds, and from then on
+# return the secondary IP (encoded in the domain).
+#
+# E.g. 1.0.0.127.rebind.example.com -> 1.2.3.4 for the first 60 seconds
+# of requests for a given requester, then, 127.0.0.1 after that.
+class RebindTimer(object):
+    def __init__(self, base_domain, primary_ip, timeout=60):
+        self.rebind_state = {}  # client_ip -> time to respond with primary IP
+
+        self.primary_ip = primary_ip
+        self.timeout = int(timeout)
+        if not(base_domain.endswith('.')): base_domain += '.'
+        self.base_domain = base_domain
+
+    def match(self, query, addr):
+        domain = query.dominio
+
+        print ' >> domain: ' + domain
+        if domain.endswith(self.base_domain):
+            response_data = self.primary_ip
+
+            if (domain, addr) in self.rebind_state:
+                if time.time() > self.rebind_state[(domain, addr)]:
+                    # return secondary IP
+                    response_data = '.'.join(domain.split('.')[0:4][::-1])
+                else:
+                    # Return primary IP
+                    response_data = self.primary_ip
+            else:
+                #insert into state and return primary IP
+                self.rebind_state[(domain, addr)] = time.time() + self.timeout
+                response_data = self.primary_ip
+
+            # return our response (primary or secondary IP)
+            response = CASE[query.type](query, response_data)
+            print ">> Matched Request - %s - returned %s" % (domain, response_data)
+            return response.make_packet()
+
+        else:
+            # lookup normal
+            return lookup_normal(query, addr)
+
+
 
 # Convenience method for threading.
 
@@ -402,30 +460,41 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description='things and stuff')
     parser.add_argument('-c', dest='path', action='store',
-                        help='Path to configuration file', required=True)
+                        help='Path to configuration file', required=False)
     parser.add_argument('-i', dest='iface', action='store',
                         help='IP address you wish to run FakeDns with - default all', default='0.0.0.0', required=False)
     parser.add_argument('--rebind', dest='rebind', action='store_true', required=False, default=False,
                         help="Enable DNS rebinding attacks - responds with one result the first request, and another result on subsequent requests")
+    parser.add_argument('--primary-ip', dest='primary_ip', action='store', required=False, default='127.0.0.1',
+                        help="When using a time-based rebind, this is the IP address returned until the timeout period")
+    parser.add_argument('--timeout', dest='timeout', action='store', required=False, default=60,
+                        help="The timeout to use for time-based rebind, in seconds")
+    parser.add_argument('--domain', dest='domain_base', action='store', required=False, default='',
+                        help="The domain to apply time-based rebind to; e.g. test.example.com will allow time-based rebind for domains like 1.0.0.127.test.example.com")
+
 
     args = parser.parse_args()
 
-    # Default config file path.
-    path = args.path
-    if not os.path.isfile(path):
-        print '>> Please create a "dns.conf" file or specify a config path: ./fakedns.py [configfile]'
-        exit()
+    if args.domain_base == '':
+        # Default config file path.
+        path = args.path
+        if not os.path.isfile(path):
+            print '>> Please create a "dns.conf" file or specify a config path: ./fakedns.py [configfile]'
+            exit()
 
-    rules = ruleEngine(path)
-    re_list = rules.re_list
+        rules = ruleEngine(path)
+        re_list = rules.re_list
+    else:
+        # Time-base rebind (Be kind, rebind?)
+        rules = RebindTimer(args.domain_base, args.primary_ip, args.timeout)
 
     interface = args.iface
     port = 53
 
     try:
         server = ThreadedUDPServer((interface, int(port)), UDPHandler)
-    except:
-        print ">> Could not start server -- is another program on udp:53?"
+    except Exception as e:
+        print ">> Could not start server -- is another program on udp:53? " + str(e)
         exit(1)
 
     server.daemon = True
