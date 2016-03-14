@@ -419,7 +419,7 @@ class RebindTimer(object):
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
-            if (domain, addr) in self.rebind_state:
+            if (domain, addr) in self.rebind_state and domain != self.base_domain:
                 if time.time() > self.rebind_state[(domain, addr)]:
                     # return secondary IP
                     response_data = '.'.join(domain.split('.')[0:4][::-1])
