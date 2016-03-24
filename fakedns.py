@@ -365,6 +365,8 @@ class ruleEngine:
 
         return lookup_normal(query, addr)
 
+    def cleanup(self):
+        pass
 
 def lookup_normal(query, addr):
     # OK, we don't have a rule for it, lets see if it exists...
@@ -411,6 +413,7 @@ class RebindTimer(object):
         self.timeout = int(timeout)
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
+        self.last_cleanup = time.time()
 
     def match(self, query, addr):
         domain = query.dominio
@@ -441,6 +444,24 @@ class RebindTimer(object):
             return lookup_normal(query, addr)
 
 
+    def cleanup(self):
+        now = time.time()
+        if now < self.last_cleanup + 30:
+            # don't run cleanup now
+            return
+
+        # Delete everything > X (60?) mins old
+        self.last_cleanup = now
+        expire_time = now - 60*60
+        removed = 0
+        for k in self.rebind_state.keys():
+            t = self.rebind_state[k]
+            if t < expire_time:
+                del self.rebind_state[k]
+                removed += 1
+
+        print 'Cleaned up %d entries' % (removed)
+
 
 # Convenience method for threading.
 
@@ -448,6 +469,7 @@ class RebindTimer(object):
 def respond(data, addr, s):
     p = DNSQuery(data)
     response = rules.match(p, addr[0])
+    rules.cleanup()  # TODO: do this more periodically, and not have it be dependent on requests
     s.sendto(response, addr)
     return response
 
