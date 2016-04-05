@@ -408,6 +408,9 @@ def lookup_normal(query, addr):
         return NONEFOUND(query).make_packet()
 
 
+def invalid_ip(ip_str):
+    return [0<=int(x)<=255 for x in ip_str.split('.')] != [True]*4
+
 # Currently only supports IPv4/A records
 # Given:
 # 1. a base domain (e.g. rebind.example.com)
@@ -433,30 +436,48 @@ class RebindTimer(ruleEngineBase):
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
         self.last_cleanup = time.time()
-        self.pattern = re.compile('[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.'+base_domain[:-1])
+        self.pattern = re.compile('(\w+\.)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.'+base_domain[:-1])
 
     def match(self, query, addr):
         domain = query.dominio
         now = time.time()
 
+        # If the domain is of the form [ID.]IP.domain, then we rebind for it
+        # otherwise, if it's *.domain, return the primary IP
+        # E.g. abc1234ZYX.1.0.168.192.site.com will rebind
+        # that domain (from anyone that requests it) to 192.168.0.1 after
+        # the timeout.
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
-            if self.pattern.match(domain):
+            regexp_match = self.pattern.match(domain)
+            if regexp_match:
+                query_id, = regexp_match.groups()
+                rebind_ip = '.'.join(domain.split('.')[1:5][::-1])
+                if query_id is None:
+                    query_id = '$_' + addr  # different namespace from IDs
+                                            # so they can't collide
+                    rebind_ip = '.'.join(domain.split('.')[0:4][::-1])
 
-                if (domain, addr) in self.rebind_state and domain != self.base_domain:
-                    if now > self.rebind_state[(domain, addr)]:
+                if invalid_ip(rebind_ip):
+                    # invalid IP
+                    logging.info("%s requested %s returning %s (permanently)" % (addr, domain, response_data))
+                    response_data = self.primary_ip
+
+                elif (domain, query_id) in self.rebind_state and domain != self.base_domain:
+                    if now > self.rebind_state[(domain, query_id)]:
                         # return secondary IP
-                        response_data = '.'.join(domain.split('.')[0:4][::-1])
+                        response_data = rebind_ip
                     else:
                         # Return primary IP
                         response_data = self.primary_ip
+                    logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
                 else:
                     #insert into state and return primary IP
-                    self.rebind_state[(domain, addr)] = now + self.timeout
+                    self.rebind_state[(domain, query_id)] = now + self.timeout
                     response_data = self.primary_ip
+                    logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
 
-                logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, addr)] - now))
             else:
                 logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
                 response_data = self.primary_ip
@@ -487,7 +508,7 @@ class RebindTimer(ruleEngineBase):
                 del self.rebind_state[k]
                 removed += 1
 
-        logging.info('Cleaned up %d entries' % (removed))
+        logging.info('Cleaned up %d entries, %d left' % (removed, len(self.rebind_state)))
 
 
 # Convenience method for threading.
