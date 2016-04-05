@@ -468,7 +468,7 @@ class RebindTimer(ruleEngineBase):
                 if primary_ip is None:
                     primary_ip = self.primary_ip
                 else:
-                    primary_ip = primary_ip[:-1]
+                    primary_ip = '.'.join(primary_ip[:-1].split('.')[::-1])
                     if invalid_ip(primary_ip):
                         primary_ip = self.primary_ip
 
