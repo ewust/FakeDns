@@ -440,29 +440,45 @@ class RebindTimer(ruleEngineBase):
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
         self.last_cleanup = time.time()
-        self.pattern = re.compile('(\w+\.)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.'+base_domain[:-1])
+        self.pattern = re.compile('([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.)?(\w+\.)?(t[0-9]+\.)?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.'+base_domain[:-1])
 
     def match(self, query, addr):
         domain = query.dominio
         now = time.time()
 
         ttl = 1 # second
-        # If the domain is of the form [ID.]IP.domain, then we rebind for it
+        # If the domain is of the form [primaryIP.][ID.][tTimeout.]IP.domain, then we rebind for it
         # otherwise, if it's *.domain, return the primary IP
-        # E.g. abc1234ZYX.1.0.168.192.site.com will rebind
+        # E.g. abc1234ZYX.t30.1.0.168.192.site.com will rebind
         # that domain (from anyone that requests it) to 192.168.0.1 after
-        # the timeout.
+        # a 30 second timeout.
+        # Example full format:
+        # 6.6.6.6.abc1234ZYX.t60.1.0.168.192.site.com
+        #  primary  ID     timeout  secondary  domain
+        # primary, ID, and timeout are optional
+        # note, ID overrides timeout if they collide (6.6.6.6.t30.1.2.3.4.site.com -> t30 is the ID,
+        #   and the default timeout is used)
+
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
             regexp_match = self.pattern.match(domain)
             if regexp_match:
-                query_id, = regexp_match.groups()
-                rebind_ip = '.'.join(domain.split('.')[1:5][::-1])
+                primary_ip, query_id, timeout, rebind_ip, = regexp_match.groups()
+                if primary_ip is None:
+                    primary_ip = self.primary_ip
+                else:
+                    primary_ip = primary_ip[:-1]
+                    if invalid_ip(primary_ip):
+                        primary_ip = self.primary_ip
+
                 if query_id is None:
                     query_id = '$_' + addr  # different namespace from IDs
                                             # so they can't collide
-                    rebind_ip = '.'.join(domain.split('.')[0:4][::-1])
+                if timeout is None:
+                    timeout = self.timeout
+                else:
+                    timeout = int(timeout[1:-1])
 
                 if invalid_ip(rebind_ip):
                     # invalid IP
@@ -475,12 +491,12 @@ class RebindTimer(ruleEngineBase):
                         response_data = rebind_ip
                     else:
                         # Return primary IP
-                        response_data = self.primary_ip
+                        response_data = primary_ip
                     logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
                 else:
                     #insert into state and return primary IP
-                    self.rebind_state[(domain, query_id)] = now + self.timeout
-                    response_data = self.primary_ip
+                    self.rebind_state[(domain, query_id)] = now + timeout
+                    response_data = primary_ip
                     logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
 
             else:
