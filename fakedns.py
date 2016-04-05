@@ -14,6 +14,7 @@ import os
 import SocketServer
 import signal
 import argparse
+import abc
 
 # inspired from DNSChef
 
@@ -281,12 +282,27 @@ class NONEFOUND(DNSResponse):
         print ">> Built NONEFOUND response"
 
 
-class ruleEngine:
+class ruleEngineBase:
+    __metaclass__ = abc.ABCMeta
 
-    def __init__(self, file):
+    def __init__(self, resolve=False):
+        self.resolve = resolve
+
+    @abc.abstractmethod
+    def match(self, query, addr):
+        pass
+
+    @abc.abstractmethod
+    def cleanup(self):
+        pass
+
+class ruleEngine(ruleEngineBase):
+
+    def __init__(self, file, resolve=False):
 
         # Hackish place to track our DNS rebinding
         self.match_history = {}
+        self.resolve = resolve
 
         self.re_list = []
         print '>>', 'Parse rules...'
@@ -405,9 +421,11 @@ def lookup_normal(query, addr):
 #
 # E.g. 1.0.0.127.rebind.example.com -> 1.2.3.4 for the first 60 seconds
 # of requests for a given requester, then, 127.0.0.1 after that.
-class RebindTimer(object):
-    def __init__(self, base_domain, primary_ip, timeout=60):
+class RebindTimer(ruleEngineBase):
+    def __init__(self, base_domain, primary_ip, timeout=60, resolve=False):
         self.rebind_state = {}  # client_ip -> time to respond with primary IP
+
+        self.resolve = resolve
 
         self.primary_ip = primary_ip
         self.timeout = int(timeout)
@@ -439,9 +457,10 @@ class RebindTimer(object):
             print ">> Matched Request - %s - returned %s" % (domain, response_data)
             return response.make_packet()
 
-        else:
-            # lookup normal
+        elif (self.resolve):
             return lookup_normal(query, addr)
+        else:
+            return NONEFOUND(query).make_packet()
 
 
     def cleanup(self):
@@ -493,6 +512,8 @@ if __name__ == '__main__':
                         help="The timeout to use for time-based rebind, in seconds")
     parser.add_argument('--domain', dest='domain_base', action='store', required=False, default='',
                         help="The domain to apply time-based rebind to; e.g. test.example.com will allow time-based rebind for domains like 1.0.0.127.test.example.com")
+    parser.add_argument('--open-resolve', dest='resolve', action='store_true', required=False, default=False,
+                        help="Resolve domains not in the config (act as an open resolver)")
 
 
     args = parser.parse_args()
@@ -504,11 +525,11 @@ if __name__ == '__main__':
             print '>> Please create a "dns.conf" file or specify a config path: ./fakedns.py [configfile]'
             exit()
 
-        rules = ruleEngine(path)
+        rules = ruleEngine(path, args.resolve)
         re_list = rules.re_list
     else:
         # Time-base rebind (Be kind, rebind?)
-        rules = RebindTimer(args.domain_base, args.primary_ip, args.timeout)
+        rules = RebindTimer(args.domain_base, args.primary_ip, args.timeout, args.resolve)
 
     interface = args.iface
     port = 53
