@@ -412,6 +412,9 @@ def lookup_normal(query, addr):
 def invalid_ip(ip_str):
     return [0<=int(x)<=255 for x in ip_str.split('.')] != [True]*4
 
+def flip_ip(ip_str):
+    return '.'.join(ip_str.split('.')[::-1])
+
 # Currently only supports IPv4/A records
 # Given:
 # 1. a base domain (e.g. rebind.example.com)
@@ -468,7 +471,7 @@ class RebindTimer(ruleEngineBase):
                 if primary_ip is None:
                     primary_ip = self.primary_ip
                 else:
-                    primary_ip = '.'.join(primary_ip[:-1].split('.')[::-1])
+                    primary_ip = flip_ip(primary_ip[:-1])
                     if invalid_ip(primary_ip):
                         primary_ip = self.primary_ip
 
@@ -480,6 +483,7 @@ class RebindTimer(ruleEngineBase):
                 else:
                     timeout = int(timeout[1:-1])
 
+                rebind_ip = flip_ip(rebind_ip)
                 if invalid_ip(rebind_ip):
                     # invalid IP
                     logging.info("%s requested %s returning %s (permanently)" % (addr, domain, response_data))
