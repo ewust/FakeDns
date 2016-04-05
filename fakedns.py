@@ -15,6 +15,7 @@ import SocketServer
 import signal
 import argparse
 import abc
+import logging
 
 # inspired from DNSChef
 
@@ -279,7 +280,7 @@ class NONEFOUND(DNSResponse):
         self.rranswers = "\x00\x00"
         self.length = "\x00\x00"
         self.data = "\x00"
-        print ">> Built NONEFOUND response"
+        logging.debug("Built NONEFOUND response")
 
 
 class ruleEngineBase:
@@ -305,7 +306,7 @@ class ruleEngine(ruleEngineBase):
         self.resolve = resolve
 
         self.re_list = []
-        print '>>', 'Parse rules...'
+        logging.debug('>> Parse rules...')
         with open(file, 'r') as rulefile:
             rules = rulefile.readlines()
             for rule in rules:
@@ -336,7 +337,7 @@ class ruleEngine(ruleEngineBase):
                     try:
                         ip = socket.gethostbyname(socket.gethostname())
                     except:
-                        print ">> Could not get your IP address from your DNS Server."
+                        logging.error(">> Could not get your IP address from your DNS Server.")
                         ip = '127.0.0.1'
                     splitrule[2] = ip
 
@@ -347,11 +348,11 @@ class ruleEngine(ruleEngineBase):
                 # TODO: More robust logging system - printing ipv6 rules
                 # requires specialness since I encode the ipv6 addr in-rule
                 if splitrule[0] == "AAAA":
-                    print '>>', splitrule[1], '->', splitrule[2].encode('hex')
+                    logging.debug('>>', splitrule[1], '->', splitrule[2].encode('hex'))
                 else:
-                    print '>>', splitrule[1], '->', splitrule[2]
+                    logging.debug('>>', splitrule[1], '->', splitrule[2])
 
-            print '>>', str(len(rules)) + " rules parsed"
+            logging.debug('>>', str(len(rules)) + " rules parsed")
 
     # Matching has now been moved into the ruleEngine so that we don't repeat
     # ourselves
@@ -376,7 +377,7 @@ class ruleEngine(ruleEngineBase):
                         response_data = rule[2]
 
                     response = CASE[query.type](query, response_data)
-                    print ">> Matched Request - " + query.dominio
+                    logging.debug(">> Matched Request - %s" % query.dominio)
                     return response.make_packet()
 
         return lookup_normal(query, addr)
@@ -396,14 +397,14 @@ def lookup_normal(query, addr):
         s.sendto(query.data, addr)
         data = s.recv(1024)
         s.close()
-        print "Unmatched Request " + query.dominio
+        logging.info("%s Unmatched Request %s" % (addr, query.dominio))
         return data
     except:
         # We really shouldn't end up here, but if we do, we want to handle it gracefully and not let down the client.
         # The cool thing about this is that NOTFOUND will take the type straight out of
         # the query object and build the correct query response type from
         # that automagically
-        print ">> Error was handled by sending NONEFOUND"
+        logging.error(">> Error was handled by sending NONEFOUND")
         return NONEFOUND(query).make_packet()
 
 
@@ -435,13 +436,13 @@ class RebindTimer(ruleEngineBase):
 
     def match(self, query, addr):
         domain = query.dominio
+        now = time.time()
 
-        print ' >> domain: ' + domain
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
             if (domain, addr) in self.rebind_state and domain != self.base_domain:
-                if time.time() > self.rebind_state[(domain, addr)]:
+                if now > self.rebind_state[(domain, addr)]:
                     # return secondary IP
                     response_data = '.'.join(domain.split('.')[0:4][::-1])
                 else:
@@ -449,12 +450,12 @@ class RebindTimer(ruleEngineBase):
                     response_data = self.primary_ip
             else:
                 #insert into state and return primary IP
-                self.rebind_state[(domain, addr)] = time.time() + self.timeout
+                self.rebind_state[(domain, addr)] = now + self.timeout
                 response_data = self.primary_ip
 
             # return our response (primary or secondary IP)
             response = CASE[query.type](query, response_data)
-            print ">> Matched Request - %s - returned %s" % (domain, response_data)
+            logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, addr)] - now))
             return response.make_packet()
 
         elif (self.resolve):
@@ -479,7 +480,7 @@ class RebindTimer(ruleEngineBase):
                 del self.rebind_state[k]
                 removed += 1
 
-        print 'Cleaned up %d entries' % (removed)
+        logging.info('Cleaned up %d entries' % (removed))
 
 
 # Convenience method for threading.
@@ -517,6 +518,7 @@ if __name__ == '__main__':
 
 
     args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s: %(message)s")
 
     if args.domain_base == '':
         # Default config file path.
