@@ -433,6 +433,7 @@ class RebindTimer(ruleEngineBase):
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
         self.last_cleanup = time.time()
+        self.pattern = re.compile('[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.'+base_domain[:-1])
 
     def match(self, query, addr):
         domain = query.dominio
@@ -441,21 +442,27 @@ class RebindTimer(ruleEngineBase):
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
-            if (domain, addr) in self.rebind_state and domain != self.base_domain:
-                if now > self.rebind_state[(domain, addr)]:
-                    # return secondary IP
-                    response_data = '.'.join(domain.split('.')[0:4][::-1])
+            if self.pattern.match(domain):
+
+                if (domain, addr) in self.rebind_state and domain != self.base_domain:
+                    if now > self.rebind_state[(domain, addr)]:
+                        # return secondary IP
+                        response_data = '.'.join(domain.split('.')[0:4][::-1])
+                    else:
+                        # Return primary IP
+                        response_data = self.primary_ip
                 else:
-                    # Return primary IP
+                    #insert into state and return primary IP
+                    self.rebind_state[(domain, addr)] = now + self.timeout
                     response_data = self.primary_ip
+
+                logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, addr)] - now))
             else:
-                #insert into state and return primary IP
-                self.rebind_state[(domain, addr)] = now + self.timeout
+                logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
                 response_data = self.primary_ip
 
             # return our response (primary or secondary IP)
             response = CASE[query.type](query, response_data)
-            logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, addr)] - now))
             return response.make_packet()
 
         elif (self.resolve):
