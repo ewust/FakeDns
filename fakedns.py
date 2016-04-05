@@ -426,12 +426,15 @@ def invalid_ip(ip_str):
 # E.g. 1.0.0.127.rebind.example.com -> 1.2.3.4 for the first 60 seconds
 # of requests for a given requester, then, 127.0.0.1 after that.
 class RebindTimer(ruleEngineBase):
-    def __init__(self, base_domain, primary_ip, timeout=60, resolve=False):
+    def __init__(self, base_domain, primary_ip, timeout=60, resolve=False, nameserver=None):
         self.rebind_state = {}  # client_ip -> time to respond with primary IP
 
         self.resolve = resolve
 
         self.primary_ip = primary_ip
+        self.nameserver = nameserver
+        if nameserver is None:
+            self.nameserver = primary_ip
         self.timeout = int(timeout)
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
@@ -479,8 +482,14 @@ class RebindTimer(ruleEngineBase):
                     logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
 
             else:
-                logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
                 response_data = self.primary_ip
+
+                # Check for match of ns#.domain
+                m = re.compile('ns\d\.'+self.base_domain)
+                if m.match(domain):
+                    response_data = self.nameserver
+
+                logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
 
             # return our response (primary or secondary IP)
             response = CASE[query.type](query, response_data)
@@ -543,6 +552,9 @@ if __name__ == '__main__':
                         help="The domain to apply time-based rebind to; e.g. test.example.com will allow time-based rebind for domains like 1.0.0.127.test.example.com")
     parser.add_argument('--open-resolve', dest='resolve', action='store_true', required=False, default=False,
                         help="Resolve domains not in the config (act as an open resolver)")
+    parser.add_argument('--nameserver', dest='nameserver', action='store', required=False, default='',
+                        help="For rebind mode, if you want ns*.domain to resolve to something different from primary IP, provide an IP here")
+
 
 
     args = parser.parse_args()
@@ -559,7 +571,7 @@ if __name__ == '__main__':
         re_list = rules.re_list
     else:
         # Time-base rebind (Be kind, rebind?)
-        rules = RebindTimer(args.domain_base, args.primary_ip, args.timeout, args.resolve)
+        rules = RebindTimer(args.domain_base, args.primary_ip, args.timeout, args.resolve, args.nameserver)
 
     interface = args.iface
     port = 53
