@@ -16,6 +16,7 @@ import signal
 import argparse
 import abc
 import logging
+import struct
 
 # inspired from DNSChef
 
@@ -146,7 +147,7 @@ def _get_question_section(query):
 
 class DNSResponse(object):
 
-    def __init__(self, query):
+    def __init__(self, query, ttl=1):
         self.id = query.data[:2]        # Use the ID from the request.
         self.flags = "\x81\x80"         # No errors, we never have those.
         self.questions = query.data[4:6]  # Number of questions asked...
@@ -162,7 +163,7 @@ class DNSResponse(object):
         self.type = None
         self.dnsclass = "\x00\x01"      # "IN" class.
         # TODO: Make this adjustable - 1 is good for noobs/testers
-        self.ttl = "\x00\x00\x00\x01"
+        self.ttl = struct.pack('!L', ttl)
         # Set by subclass because is variable except in A/AAAA records.
         self.length = None
         self.data = None                # Same as above.
@@ -182,8 +183,8 @@ class DNSResponse(object):
 
 class A(DNSResponse):
 
-    def __init__(self, query, record):
-        super(A, self).__init__(query)
+    def __init__(self, query, record, ttl=1):
+        super(A, self).__init__(query, ttl)
         self.type = "\x00\x01"
         self.length = "\x00\x04"
         self.data = self.get_ip(record, query)
@@ -198,8 +199,8 @@ class A(DNSResponse):
 
 class AAAA(DNSResponse):
 
-    def __init__(self, query, address):
-        super(AAAA, self).__init__(query)
+    def __init__(self, query, address, ttl=1):
+        super(AAAA, self).__init__(query, ttl)
         self.type = "\x00\x1c"
         self.length = "\x00\x10"
         # Address is already encoded properly for the response at rule-builder
@@ -273,8 +274,8 @@ CASE = {
 
 class NONEFOUND(DNSResponse):
 
-    def __init__(self, query):
-        super(NONEFOUND, self).__init__(query)
+    def __init__(self, query, ttl=1):
+        super(NONEFOUND, self).__init__(query, ttl)
         self.type = query.type
         self.flags = "\x81\x83"
         self.rranswers = "\x00\x00"
@@ -445,6 +446,7 @@ class RebindTimer(ruleEngineBase):
         domain = query.dominio
         now = time.time()
 
+        ttl = 1 # second
         # If the domain is of the form [ID.]IP.domain, then we rebind for it
         # otherwise, if it's *.domain, return the primary IP
         # E.g. abc1234ZYX.1.0.168.192.site.com will rebind
@@ -482,6 +484,7 @@ class RebindTimer(ruleEngineBase):
                     logging.info("%s requested %s returning %s for %0.3f more seconds" % (addr, domain, response_data, self.rebind_state[(domain, query_id)] - now))
 
             else:
+                ttl = 1800 # 0.5 hour
                 response_data = self.primary_ip
 
                 # Check for match of ns#.domain
@@ -492,13 +495,13 @@ class RebindTimer(ruleEngineBase):
                 logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
 
             # return our response (primary or secondary IP)
-            response = CASE[query.type](query, response_data)
+            response = CASE[query.type](query, response_data, ttl)
             return response.make_packet()
 
         elif (self.resolve):
             return lookup_normal(query, addr)
         else:
-            return NONEFOUND(query).make_packet()
+            return NONEFOUND(query, 300).make_packet()
 
 
     def cleanup(self):
