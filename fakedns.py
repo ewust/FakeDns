@@ -180,14 +180,13 @@ class DNSResponse(object):
 # All classess need to set type, length, and data fields of the DNS Response
 # Finished
 
-
 class A(DNSResponse):
 
     def __init__(self, query, record, ttl=1):
         super(A, self).__init__(query, ttl)
         self.type = "\x00\x01"
         self.length = "\x00\x04"
-        self.data = self.get_ip(record, query)
+        self.data = socket.inet_aton(record)
 
     def get_ip(self, dns_record, query):
         ip = dns_record
@@ -260,9 +259,27 @@ class TXT(DNSResponse):
         # length field for this since it is already in the right spot
         self.length = self.length + chr(len(txt_record))
 
+class NS(DNSResponse):
+    def __init__(self, query, record, ttl=600):
+        super(NS, self).__init__(query, ttl)
+        self.type = "\x00\x02"
+        self.length = struct.pack('!H', 6)
+        self.data = '\x03ns1\xc0\x0c'   # hacky, this is ns1.(our domain)
+                                        # with a backreference
+        # additional data
+        # double hack, point to our above data...
+        additional_rr_data = '\xc0' + struct.pack('!B', 0x18+len(self.query)) + \
+            struct.pack('!HHLH', 1, 1, ttl, 4) + \
+            socket.inet_aton(record)
+
+        self.rradditional = struct.pack('!H', 1)
+        self.data += additional_rr_data
+
+
 # And this one is because Python doesn't have Case/Switch
 CASE = {
     "\x00\x01": A,
+    "\x00\x02": NS,
     "\x00\x1c": AAAA,
     "\x00\x05": CNAME,
     "\x00\x0c": PTR,
@@ -509,7 +526,7 @@ class RebindTimer(ruleEngineBase):
 
                 # Check for match of ns#.domain
                 m = re.compile('ns\d\.'+self.base_domain)
-                if m.match(domain):
+                if m.match(domain) or query.type == '\x00\x02':  # NS query
                     response_data = self.nameserver
 
                 logging.info("%s requested %s returning %s (permanently)" %  (addr, domain, response_data))
