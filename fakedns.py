@@ -457,6 +457,7 @@ class RebindTimer(ruleEngineBase):
         if nameserver is None:
             self.nameserver = primary_ip
         self.timeout = int(timeout)
+        base_domain = base_domain.lower()
         if not(base_domain.endswith('.')): base_domain += '.'
         self.base_domain = base_domain
         self.last_cleanup = time.time()
@@ -479,6 +480,7 @@ class RebindTimer(ruleEngineBase):
         # note, ID overrides timeout if they collide (6.6.6.6.t30.1.2.3.4.site.com -> t30 is the ID,
         #   and the default timeout is used)
 
+        domain = domain.lower()
         if domain.endswith(self.base_domain):
             response_data = self.primary_ip
 
